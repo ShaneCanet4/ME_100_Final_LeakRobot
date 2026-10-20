@@ -28,7 +28,7 @@ def zigzag_path(
     The arrow is assumed to point along the robot's 5 in width. Thus its 7 in
     length sweeps sideways across each lane. The route is allowed to extend
     outside the selected 1 ft tile, so it can cover the tile edges and turn
-    outside the tile. For a 12 in tile, four lanes spaced 5 in apart cover the
+    outside the tile. For a 12 in tile, two lanes spaced 5 in apart cover the
     tile with a 2 in overlap between the robot-width swaths.
 
     The return value is a list of (x, y) points in tile fractions, where (0,0)
@@ -54,21 +54,25 @@ def zigzag_path(
     # Across the lanes, the 7 in length is the swath width. Leave a deliberate
     # overlap so small position errors do not leave a strip unsearched.
     side_margin_in = robot_length_in / 2
-    # Start the first lane 1.5 in before the tile and repeat every 5 in. The
-    # robot's 7 in sideways body therefore covers each edge and overlaps lanes.
-    first_lane_in = -side_margin_in + overlap_in
+    first_lane_in = side_margin_in
+    last_lane_in = tile_size_in - side_margin_in
     stride_in = robot_length_in - overlap_in
 
-    # Include every lane whose center is no farther than half a body-length
-    # beyond the far edge. The final lane can therefore lie outside the tile.
-    lane_y_positions = []
-    lane_y = first_lane_in
-    while lane_y <= tile_size_in + side_margin_in:
+    # Place lanes no farther apart than the 5 in stride, then add the final
+    # edge-covering lane if the stride did not land exactly on it. This creates
+    # the fewest full-width sweeps for the selected overlap. For 12 in: centers
+    # are 3.5 in and 8.5 in, so 7 in swaths overlap by 2 in and cover 12 in.
+    lane_y_positions = [first_lane_in]
+    lane_y = first_lane_in + stride_in
+    while lane_y < last_lane_in:
         lane_y_positions.append(lane_y)
         lane_y += stride_in
+    if last_lane_in > lane_y_positions[-1]:
+        lane_y_positions.append(last_lane_in)
 
     # Convert inch positions to fractions because the GUI's cell can be any
-    # pixel size. These two x values are the endpoints of every straight sweep.
+    # pixel size. Extend the x sweep past both tile edges so the robot can
+    # finish each pass and pivot outside the tile.
     left = left_in / tile_size_in
     right = right_in / tile_size_in
     points = []

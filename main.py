@@ -62,6 +62,9 @@ LOCAL_TILE_INSET = 102               # Blank zoom margin around the 1 ft tile.
 DOT_RADIUS = 7
 FRAME_MS = 25                      # Time between animation updates, in ms.
 TURN_RATE_DEG_PER_SECOND = 240     # How quickly the robot can rotate in place.
+# Demo-only leak proximity: within 3.5 in of a marked point, latch a stop.
+# A real sensor must replace this placeholder with its measured detection event.
+SIMULATED_LEAK_RADIUS_FT = ROBOT_LENGTH_IN / 24
 grid = SearchGrid(ROWS, COLUMNS)   # The map data is separate from its drawing.
 # Generate fixed, uniform rack rows: one clear foot at the perimeter, racks one
 # foot deep, and two clear feet (two grid cells) of aisle between rack rows.
@@ -90,6 +93,9 @@ completed_path_records = []        # Previous finished patterns for saving/expor
 spill_points = []                   # Exact spill coordinates: tile plus local x/y.
 spill_mode = False                  # When True, clicks place spills in two steps.
 spill_selection_cell = None          # Tile chosen before selecting its small patch.
+detected_spill_indices = set()       # Do not repeatedly stop for one detected patch.
+leak_detection_events = []           # Record the pose and spill point at each stop.
+leak_stop_latched = False            # Requires an operator acknowledgment to resume.
 movement_command_vector = []       # Upcoming pivot-and-drive commands for display/save.
 local_canvas = None                # Enlarged one-square pattern canvas.
 route_status = None                # Completion/obstacle count shown under both views.
@@ -285,6 +291,14 @@ def current_destination():
 def update_command_readout():
     """Explain the next movement in plain language beside the path display."""
     global movement_command_vector
+    if leak_stop_latched:
+        command_text.set(
+            "LEAK DETECTED: robot stopped at its current pose. Acknowledge to resume."
+        )
+        movement_vector_text.set(
+            "Movement-command vector paused; the full plan remains saved on request."
+        )
+        return
     if grid.complete:
         # StringVar.set(value) changes text shown by its connected Label.
         command_text.set("No next movement: all reachable squares are complete.")
@@ -394,6 +408,55 @@ def motion_commands_from_pose(start_x, start_y, start_heading, waypoints):
     return commands
 
 
+def check_simulated_leak_detection():
+    """Stop at the first marked spill point reached by the simulated robot.
+
+    The prototype has no physical sensor, so this uses proximity to a manually
+    placed spill marker as a demonstration of the required stop behavior. A
+    hardware sensor adapter should call the same stop behavior when its own
+    detector reports a leak, using a calibrated confidence and location.
+    """
+    global paused, leak_stop_latched
+    if leak_stop_latched:
+        return False
+
+    for spill_index, spill in enumerate(spill_points):
+        if spill_index in detected_spill_indices:
+            continue
+        spill_x = spill["column"] + spill["x_fraction"]
+        spill_y = spill["row"] + spill["y_fraction"]
+        # hypot() gives straight-line distance in feet in the global map frame.
+        distance_ft = math.hypot(robot_column - spill_x, robot_row - spill_y)
+        if distance_ft <= SIMULATED_LEAK_RADIUS_FT:
+            detected_spill_indices.add(spill_index)
+            event = {
+                "spill_index_1_based": spill_index + 1,
+                "tile_row_1_based": spill["row"] + 1,
+                "tile_column_1_based": spill["column"] + 1,
+                "spill_x_ft": round(spill_x, 4),
+                "spill_y_ft": round(spill_y, 4),
+                "robot_x_ft_at_stop": round(robot_column, 4),
+                "robot_y_ft_at_stop": round(robot_row, 4),
+                "robot_heading_degrees_at_stop": round(
+                    math.degrees(robot_heading) % 360, 2
+                ),
+                "distance_to_spill_ft": round(distance_ft, 4),
+                "detection_method": "simulated proximity to marked spill",
+            }
+            leak_detection_events.append(event)
+            paused = True
+            leak_stop_latched = True
+            pause_button.configure(text="Acknowledge leak")
+            status_text.set(
+                f"SIMULATED LEAK DETECTED in row {spill['row'] + 1}, "
+                f"column {spill['column'] + 1}. Robot stopped at "
+                f"x={robot_column:.2f} ft, y={robot_row:.2f} ft. "
+                "Acknowledge leak to resume."
+            )
+            return True
+    return False
+
+
 def advance_forward_toward(destination_row, destination_column):
     """Turn in place toward a waypoint, then move only along the front arrow.
 
@@ -472,12 +535,19 @@ def draw_map(target_canvas, show_robot):
     spill_tiles = {(item["row"], item["column"]) for item in spill_points}
     for row, column in spill_tiles:
         x, y = map_center(row, column)
+        tile_spill_indices = [
+            index for index, item in enumerate(spill_points)
+            if (item["row"], item["column"]) == (row, column)
+        ]
+        detected_here = any(index in detected_spill_indices for index in tile_spill_indices)
         target_canvas.create_oval(
             x - 10, y - 10, x + 10, y + 10,
-            fill="#fff1f1", outline="#c52222", width=2,
+            fill="#e1f5e8" if detected_here else "#fff1f1",
+            outline="#20833c" if detected_here else "#c52222", width=2,
         )
         target_canvas.create_text(
-            x, y, text="!", fill="#c52222", font=("Arial", 13, "bold")
+            x, y, text="!", fill="#20833c" if detected_here else "#c52222",
+            font=("Arial", 13, "bold")
         )
 
     # While choosing a spill, outline its selected tile so the user can see
@@ -703,14 +773,15 @@ def draw_local_pattern():
     # selection, this is the precise area where the user is about to click.
     if view_cell is not None:
         view_row, view_column = view_cell
-        for spill in spill_points:
+        for spill_index, spill in enumerate(spill_points):
             if (spill["row"], spill["column"]) != (view_row, view_column):
                 continue
             spill_x = inset + spill["x_fraction"] * (LOCAL_PIXELS - 2 * inset)
             spill_y = inset + spill["y_fraction"] * (LOCAL_PIXELS - 2 * inset)
             local_canvas.create_oval(
                 spill_x - 7, spill_y - 7, spill_x + 7, spill_y + 7,
-                fill="#e52323", outline="white", width=2,
+                fill="#20833c" if spill_index in detected_spill_indices else "#e52323",
+                outline="white", width=2,
             )
             local_canvas.create_text(
                 spill_x, spill_y, text="!", fill="white", font=("Arial", 9, "bold")
@@ -724,7 +795,7 @@ def redraw():
     update_command_readout()
     if active_pattern == "Zigzag":
         pattern_info_text.set(
-            "Zigzag: 3 lanes, 5 in apart (2 in overlap) | Robot: 7×5 in, arrow along width"
+            "Zigzag: 2 lanes, 5 in apart (2 in overlap) | Robot: 7×5 in, arrow along width"
         )
     else:
         pattern_info_text.set(
@@ -733,7 +804,8 @@ def redraw():
     route_status.set(
         f"Completed: {len(grid.searched)} / {ROWS * COLUMNS - len(grid.obstacles)} "
         f"searchable squares    |    Obstacles: {len(grid.obstacles)}"
-        f"    |    Spill patches: {len(spill_points)} (spill mode uses two clicks)"
+        f"    |    Spill patches: {len(spill_points)}"
+        f"    |    Simulated detections: {len(leak_detection_events)}"
     )
 
 
@@ -809,6 +881,8 @@ def save_path_plan():
         "planned_route_movement_vectors": vectors_for_waypoints(route_xy_points),
         "current_square_path": active_record,
         "current_movement_command_vector": movement_command_vector,
+        "simulated_leak_detection_radius_ft": SIMULATED_LEAK_RADIUS_FT,
+        "leak_detection_events": leak_detection_events,
         "spill_patches": [
             {
                 "tile_row_1_based": spill["row"] + 1,
@@ -1014,6 +1088,13 @@ def update_search():
     # path_index and main_after_id are reassigned by this callback; global
     # updates the shared app state declared at the top of this file.
     global path_index, main_after_id
+    # Check before any movement in this frame. Once inside the demo detection
+    # radius, the simulation latches a stop and waits for operator acknowledgment.
+    if check_simulated_leak_detection():
+        redraw()
+        main_after_id = window.after(FRAME_MS, update_search)
+        return
+
     # Keep a callback scheduled while paused or complete. Resume can continue
     # without accidentally starting a second animation loop.
     if paused or grid.complete:
@@ -1056,7 +1137,18 @@ def update_search():
 
 def toggle_pause():
     """Pause or resume motion without closing the application window."""
-    global paused
+    global paused, leak_stop_latched
+    if leak_stop_latched:
+        # A leak stop is intentionally latched; the operator must acknowledge
+        # it before the path planner can issue motion again.
+        leak_stop_latched = False
+        paused = False
+        pause_button.configure(text="Pause")
+        status_text.set(
+            "Leak acknowledged. Search resumes; that marked spill will not trigger twice."
+        )
+        redraw()
+        return
     paused = not paused
     # configure(option=value) edits an existing button; changing text changes
     # what action the button advertises after this click.
@@ -1070,6 +1162,7 @@ def reset_search():
     global robot_row, robot_column, robot_heading, path_points, path_index
     global travel_points, planned_route, active_pattern, paused, spill_mode
     global spill_selection_cell
+    global leak_stop_latched
     grid.reset()
     # SearchGrid.reset() clears all obstacles, so restore the standard rack
     # layout immediately afterward. Manually toggled obstacles are reset away.
@@ -1083,8 +1176,11 @@ def reset_search():
     active_pattern = pattern_choice.get()
     completed_path_records.clear()
     spill_points.clear()
+    detected_spill_indices.clear()
+    leak_detection_events.clear()
     spill_mode = False
     spill_selection_cell = None
+    leak_stop_latched = False
     spill_button.configure(text="Add spill: off")
     paused = False
     # Restore the button's original label after resetting the simulation.

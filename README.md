@@ -19,7 +19,14 @@ The robot's front arrow follows its 5 in width. Its 7 in long axis lies across
 the arrow and provides the nominal swath width. Spill placement uses two clicks:
 select a clear 1 ft map tile, then click the spill's sub-patch in the enlarged
 tile view. The saved plan contains both the tile index and the spill's position
-within that tile.
+within that tile. In the simulator, the robot latches a stop when it comes
+within 3.5 in of an annotated patch. The **Acknowledge leak** button is required
+before motion resumes, and that patch will not trigger a second stop.
+
+For the current 12 in square, the zigzag uses two lane centers 5 in apart.
+Each idealized swath is 7 in wide, so the lanes overlap by 2 in and cover the
+tile width. More lanes would add redundant coverage and take longer; increase
+the overlap if sensor uncertainty later requires denser sampling.
 
 ## Run from Python
 
@@ -62,14 +69,15 @@ the executable to include newer source code.
   converts each straight segment into a pivot angle, target global `x`/`y`,
   heading, and forward distance. JSON stores the full remaining vector; the
   window shows its first 12 commands for readability.
-- Spill patches are annotated coordinates. They do not currently change the
-  target-selection algorithm, represent a sensor reading, or simulate cleanup.
+- Spill patches are annotated coordinates; the simulated proximity stop does
+  not represent a physical sensor measurement or cleanup action.
 
 The local coverage pattern may leave the selected tile and is not checked
 against neighboring racks. Sensor field of view, localization error, real turn
 radius, wheel slip, collision clearance, and motor-level control are not modeled.
-Treat the planner output as a learning prototype until those physical details
-are measured and included.
+The 3.5 in detection radius is a demonstration setting, not a sensor
+specification. Treat the planner output as a learning prototype until those
+physical details are measured and included.
 
 ## Repository name
 

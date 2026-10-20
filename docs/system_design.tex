@@ -77,7 +77,7 @@ nominal swath width of $7\,\mathrm{in}$. A 2-inch overlap gives lane spacing
 \[
   \Delta = 7\,\mathrm{in}-2\,\mathrm{in}=5\,\mathrm{in}.
 \]
-The generated path has four parallel sweeps on a 12-inch square, joined by
+The generated path has two parallel sweeps on a 12-inch square, joined by
 orthogonal repositioning legs. At each corner, the robot pivots in place and
 then drives forward along the next segment. The circle-spiral option is a
 sampled outward path followed by a retrace toward its start.
@@ -120,8 +120,12 @@ and normalized coordinates $(u_s,v_s)\in[0,1]^2$. Its map-frame position is
 \]
 Spill annotations are included in the JSON plan alongside rack layout,
 completed tile paths, route cells, and the current movement-command vector.
-They are metadata only: the planner does not yet prioritize a spill, infer a
-leak from sensor data, or mark a spill as resolved.
+In the simulator, the robot stops and latches when its map position comes
+within $3.5\,\mathrm{in}$ of an annotated spill point. The operator must
+acknowledge the stop before motion resumes; an acknowledged patch does not
+trigger another stop. This proximity rule demonstrates the stop behavior only:
+the program has no physical leak sensor, does not prioritize spill tiles, and
+does not mark a spill as resolved.
 
 \section{Physical-system development steps}
 
