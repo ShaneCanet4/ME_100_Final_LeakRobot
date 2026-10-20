@@ -1,0 +1,19 @@
+# Python cache and local virtual environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Temporary PyInstaller build work and old default output
+/build/
+/build_*/
+/dist/
+
+# User-generated path export
+/search_path_plan.json
+
+# LaTeX compiler scratch files; keep the .tex source and any finished PDF
+/docs/*.aux
+/docs/*.log
+/docs/*.out
+/docs/*.toc

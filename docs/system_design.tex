@@ -1,0 +1,154 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,booktabs}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{listings}
+
+\title{DCLAR: Data Center Leak Assessment Robot\\High-Level System Design}
+\author{Student Design Prototype}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+DCLAR is a software prototype for planning a leak-search route over a gridded
+data-center floor. It separates floor-tile routing from within-tile coverage,
+represents turns as in-place pivots, and stores destinations in a global map
+frame. Spill locations can be annotated at sub-tile resolution. The current
+program visualizes this plan; it does not read a leak sensor or command physical
+motors.
+\end{abstract}
+
+\section{System boundary}
+
+The modeled workspace is a $10\times10$ array of $1\,\mathrm{ft}$ square
+cells. Rack rows are represented by blocked cells. A simulated robot has a
+$7\,\mathrm{in}\times5\,\mathrm{in}$ rectangular footprint; its forward arrow
+lies along the $5\,\mathrm{in}$ side, leaving the $7\,\mathrm{in}$ axis
+perpendicular to forward motion. The current software uses these dimensions to
+space coverage passes, but it does not yet perform continuous collision checks
+against rack geometry.
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Subsystem & Responsibility \\
+\midrule
+Map model & Cell occupancy, completed search cells, spill annotations \\
+Route planner & Select a reachable unsearched cell and find a shortest grid path \\
+Coverage planner & Generate ordered local waypoints for one cell \\
+Motion representation & Convert consecutive waypoints to pivot-and-drive records \\
+Execution layer & Currently a GUI animation; physical sensors and motors are absent \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Map-level route selection}
+
+Let each cell be indexed by $(r,c)$, with $r$ increasing downward and $c$
+increasing rightward. The traversable set excludes rack and user-added obstacle
+cells. From the robot's current cell $s$, the planner considers every reachable
+cell that is neither blocked nor already searched. For each candidate $g$, a
+breadth-first search (BFS) finds a shortest path using only the four cardinal
+neighbors:
+\[
+  \mathcal{N}(r,c)=\{(r-1,c),(r+1,c),(r,c-1),(r,c+1)\}.
+\]
+The selected target is
+\[
+  g^*=\operatorname*{arg\,min}_{g\in U_{\mathrm{reachable}}}
+      \bigl(d_{\mathrm{BFS}}(s,g),\ r_g,\ c_g\bigr),
+\]
+where the row and column terms make equal-distance choices deterministic.
+The route is therefore shortest in grid steps for the selected target; it is
+not a globally optimal tour over all remaining cells. Transit cells are
+waypoints only. A tile is recorded as searched after its local pattern finishes.
+
+\section{Within-tile coverage}
+
+The local planner uses coordinates $(u,v)$ measured in tile widths from the
+tile's upper-left corner. Thus the tile occupies $0\leq u,v\leq1$; points
+outside this range are permitted so the robot footprint can extend across tile
+boundaries. For the zigzag pattern, the 7-inch lateral dimension gives a
+nominal swath width of $7\,\mathrm{in}$. A 2-inch overlap gives lane spacing
+\[
+  \Delta = 7\,\mathrm{in}-2\,\mathrm{in}=5\,\mathrm{in}.
+\]
+The generated path has four parallel sweeps on a 12-inch square, joined by
+orthogonal repositioning legs. At each corner, the robot pivots in place and
+then drives forward along the next segment. The circle-spiral option is a
+sampled outward path followed by a retrace toward its start.
+
+The footprint-based swath is only a geometric approximation. A real search
+coverage model needs the sensor field of view, desired detection overlap,
+localization uncertainty, speed limits, and measured turning behavior.
+
+\section{Global motion-command vector}
+
+The map frame uses feet, with origin at the map's upper-left corner:
+\[
+  x=c+u,\qquad y=r+v.
+\]
+The display convention is $+x$ east/right and $+y$ south/down. A segment from
+$(x_i,y_i)$ to $(x_{i+1},y_{i+1})$ has length and desired heading
+\[
+  L_i=\sqrt{(x_{i+1}-x_i)^2+(y_{i+1}-y_i)^2},\qquad
+  \theta_i=\operatorname{atan2}(y_{i+1}-y_i,x_{i+1}-x_i).
+\]
+Given current heading $\theta_{i-1}$, the signed shortest pivot is
+\[
+  \Delta\theta_i=\operatorname{wrap}_{[-\pi,\pi)}(\theta_i-\theta_{i-1}).
+\]
+Each entry in the program's \texttt{movement\_command\_vector} contains
+\texttt{pivot\_angle\_degrees}, \texttt{global\_heading\_degrees},
+\texttt{target\_x\_ft}, \texttt{target\_y\_ft}, and
+\texttt{distance\_forward\_ft}. A physical low-level controller would need
+to execute the pivot, verify heading, drive toward the target, and verify
+position with encoders and/or localization sensors. The current animation
+illustrates this sequence but does not provide motor commands.
+
+\section{Spill annotation and saved data}
+
+Spill placement is a two-stage geometric input: choose a map cell, then choose
+a point in its enlarged local view. The point is stored as tile index $(r,c)$
+and normalized coordinates $(u_s,v_s)\in[0,1]^2$. Its map-frame position is
+\[
+  (x_s,y_s)=(c+u_s,\ r+v_s)\quad\text{feet}.
+\]
+Spill annotations are included in the JSON plan alongside rack layout,
+completed tile paths, route cells, and the current movement-command vector.
+They are metadata only: the planner does not yet prioritize a spill, infer a
+leak from sensor data, or mark a spill as resolved.
+
+\section{Physical-system development steps}
+
+Before using this plan on hardware, the following interfaces need explicit
+design and validation:
+\begin{enumerate}
+  \item A calibrated floor map and a footprint-aware obstacle-clearance check.
+  \item Sensor coverage and leak-detection logic, including confidence and
+        false-alarm handling.
+  \item A localization source that reports $(x,y,\theta)$ in the map frame.
+  \item Closed-loop pivot and forward-drive controllers with speed, stop, and
+        emergency-stop limits.
+  \item A mission state machine that distinguishes planned, executed,
+        interrupted, and verified search segments.
+  \item Data logging that records timestamps, robot pose, sensor observations,
+        commanded motion, and completion status for each waypoint.
+\end{enumerate}
+
+\section{Implementation map}
+
+\begin{itemize}
+  \item \texttt{route.py}: rack generation, BFS path reconstruction, and
+        nearest reachable unsearched-cell selection.
+  \item \texttt{search.py}: zigzag and circle-spiral waypoint generation and
+        map search-state storage.
+  \item \texttt{main.py}: simulation state, pivot-and-drive vector generation,
+        spill-point input, visualization, and JSON export.
+\end{itemize}
+
+\end{document}
