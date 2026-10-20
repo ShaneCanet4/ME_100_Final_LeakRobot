@@ -15,6 +15,54 @@ planner; it is not a robot controller or a leak sensor.
 | Simulation and data | `main.py` | Animates pivot-in-place and forward-only motion, accepts spill locations, shows the current command vector, and saves a JSON plan. |
 | System description | `docs/system_design.tex` | Higher-level, physical-system-oriented description of the planner, data flow, coordinate frame, and limits. |
 
+## How the Python files communicate
+
+`main.py` is the coordinator. It imports the route functions from `route.py`
+and the map/pattern tools from `search.py`. The flow is:
+
+1. `main.py` asks `route.nearest_unsearched(...)` which clear tile to search.
+2. It asks `route.path_between(...)` for the cell-by-cell route to that tile.
+   This route only gets the robot to the tile; it does not mark transit tiles
+   as searched.
+3. `main.py` asks `search.make_search_path(...)` for the ordered points inside
+   the chosen tile. `search.py` gives local tile coordinates; `main.py` adds
+   the tile's row and column to convert them into map coordinates.
+4. The Tkinter animation repeatedly moves the simulated robot toward those
+   points. Once all points in the tile are reached, `main.py` calls
+   `grid.complete_target()` and then plans the next tile.
+
+`route.py` and `search.py` do not call each other and do not control the GUI.
+They are planning/data modules called by `main.py`.
+
+## Where the digital-twin data lives
+
+The current tile map is a `SearchGrid` object in memory, created in
+`main.py`. A map cell is an integer pair `(row, column)`, with row 0 and column
+0 at the upper-left. `grid.obstacles` and `grid.searched` are sets of these
+pairs, `grid.order` is the completion-order list, and `grid.current_cell` and
+`grid.target_cell` identify the current and selected cells. The continuous
+robot pose (`robot_row`, `robot_column`, `robot_heading`) and the exact
+sub-tile spill locations are also held in `main.py` variables. This is a
+software model of the map and robot, not a sensor-fed or continuously saved
+digital twin.
+
+Paths are Python lists while the program runs. `planned_route` contains
+`(row, column)` map cells. `path_points` contains `(x, y)` fractions relative
+to the active tile. `movement_command_vector` is a list of dictionaries, one
+per upcoming straight segment, with pivot angle, global heading, target `x` and
+`y` in feet, and forward distance. When a tile finishes, its local waypoints
+and derived `dx`, `dy`, distance, and heading vectors are appended to
+`completed_path_records`.
+
+Clicking **Save path plan** writes a snapshot to `search_path_plan.json` beside
+`main.py`. JSON turns Python lists and dictionaries into readable text. It
+includes rack layout, completed tile paths, planned route cells, the active
+tile path, the current movement-command vector, spill patches, and simulated
+leak events. The program currently writes that snapshot but does not reload it
+on startup; unsaved progress is lost when the app closes. See
+[`docs/system_design.tex`](docs/system_design.tex) for the coordinate and
+field-by-field data model.
+
 The robot's front arrow follows its 5 in width. Its 7 in long axis lies across
 the arrow and provides the nominal swath width. Spill placement uses two clicks:
 select a clear 1 ft map tile, then click the spill's sub-patch in the enlarged

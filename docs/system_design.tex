@@ -155,4 +155,103 @@ design and validation:
         spill-point input, visualization, and JSON export.
 \end{itemize}
 
+\section{Software communication and state ownership}
+
+\texttt{main.py} is the coordinator. It imports functions from both planning
+modules and passes ordinary Python values between them. The modules do not
+communicate through a network, shared database, or hardware bus:
+\texttt{route.py} and \texttt{search.py} are called by \texttt{main.py}, and
+they do not call each other.
+
+At startup, \texttt{main.py} creates one \texttt{SearchGrid} instance. This
+object is the in-memory map-state container. The principal map state is:
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Python field & Type & Meaning \\
+\midrule
+\texttt{rows}, \texttt{columns} & integers & Map dimensions in cells \\
+\texttt{obstacles} & set of $(r,c)$ & Rack cells and user-added blocked cells \\
+\texttt{searched} & set of $(r,c)$ & Cells whose complete local pattern finished \\
+\texttt{order} & list of $(r,c)$ & Completed cells in completion order \\
+\texttt{current\_cell} & $(r,c)$ & Last completed cell used as route origin \\
+\texttt{target\_cell} & $(r,c)$ or none & Cell whose local pattern is active \\
+\texttt{complete} & Boolean & Whether no reachable work remains \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+These row/column pairs use zero-based Python indices. Thus the upper-left cell
+is $(0,0)$ in memory but is reported as row 1, column 1 in saved JSON. A set
+stores unique membership efficiently; a list is used for \texttt{order}
+because order matters there. The GUI does not own a second map: drawing
+functions read these state values and render them on a canvas.
+
+The hand-off for each target proceeds as follows:
+\begin{enumerate}
+  \item \texttt{main.py} calls
+        \texttt{nearest\_unsearched(current, searched, obstacles, rows, columns)}
+        in \texttt{route.py}. That function tests eligible cells with
+        \texttt{path\_between}, whose BFS returns a list of map cells from
+        start through goal.
+  \item \texttt{main.py} saves that list as \texttt{planned\_route}; its
+        entries after the start become \texttt{travel\_points}. Transit cells
+        are visited for travel but remain unsearched.
+  \item \texttt{main.py} calls \texttt{make\_search\_path(pattern)} in
+        \texttt{search.py}. It receives an ordered list of local $(u,v)$ tile
+        fractions. The animation converts a local point to global map feet by
+        $x=c+u$ and $y=r+v$ for target cell $(r,c)$.
+  \item Tkinter's scheduled \texttt{update\_search} callback advances the
+        robot pose a small amount per frame. Once every local point is reached,
+        \texttt{complete\_target()} adds the target to \texttt{searched} and
+        \texttt{order}; only then is another target selected.
+\end{enumerate}
+
+The live robot pose is held separately in \texttt{main.py}: continuous
+\texttt{robot\_row}, \texttt{robot\_column}, and \texttt{robot\_heading}
+values. This lets the dot move between cell centers. Other active plan state
+includes \texttt{path\_points} and \texttt{path\_index} for the current
+within-cell pattern, \texttt{travel\_points} for the map route still to
+travel, and \texttt{planned\_route} for its complete cell sequence.
+
+\section{Path data structures and persistence}
+
+There are several distinct path representations rather than one universal
+path array:
+\begin{itemize}
+  \item \texttt{planned\_route}: a list of integer $(row,column)$ map cells,
+        including the start and target. This is the route between tile centers.
+  \item \texttt{path\_points}: a list of floating-point $(u,v)$ fractions for
+        the active tile's local coverage pattern. Values may extend outside
+        $[0,1]$ to allow the body to pass the tile edge.
+  \item \texttt{movement\_command\_vector}: a list of dictionaries generated
+        by \texttt{motion\_commands\_from\_pose}. Each describes one upcoming
+        pivot-and-forward segment with pivot angle, desired heading, global
+        target $(x,y)$ in feet, distance, and action. This is a high-level
+        command representation, not motor-controller output.
+  \item \texttt{completed\_path\_records}: a list of records appended after a
+        tile's local path finishes. Each record identifies the 1-based tile,
+        pattern, local waypoints in feet, and segment vectors $(dx,dy)$,
+        distance, and heading.
+\end{itemize}
+
+The **Save path plan** button calls \texttt{save\_path\_plan}. It serializes
+selected in-memory fields as JSON in \texttt{search\_path\_plan.json} beside
+\texttt{main.py}. JSON is plain text representing nested dictionaries and
+lists, so it can be opened in a text editor and consumed by another program.
+The file includes coordinate conventions, robot dimensions, rack layout,
+completed paths, the currently planned route and tile path, the current motion
+vector, spill patches, and simulated leak events. Spill patches are stored by
+integer tile index plus local fractions; their global position follows the
+same $x=c+u$, $y=r+v$ conversion.
+
+The save is a snapshot, not automatic persistence: the application does not
+currently load the JSON file at startup, and the live tile state (including
+\texttt{searched}, \texttt{current\_cell}, and \texttt{target\_cell}) is not
+fully serialized as a restorable mission checkpoint. Therefore progress in
+memory is lost on exit unless a future load/checkpoint feature is added. Also,
+the saved JSON stores completed tile paths and current route/vector data, but
+does not by itself prove a physical robot executed them; execution status,
+timestamps, and sensor readings would need explicit logging fields.
+
 \end{document}
